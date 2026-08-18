@@ -1,30 +1,29 @@
 # PROJECT IDENTITY
 - **Name**: paper-data-etl
-- **Objective**: Tạo dữ liệu continual pretraining cho LLM. Thu thập và xử lý các bài báo khoa học Việt Nam từ trang Vietnam Journals Online (VJOL - vjol.info.vn), tạo ra corpus sạch, chất lượng cao, đồng thời xây dựng bộ báo cáo trực quan để đánh giá dữ liệu.
+- **Objective**: Tạo dữ liệu continual pretraining cho LLM. Thu thập và xử lý các bài báo khoa học Việt Nam từ trang CSDL Quốc Gia (VISTA - sti.vista.gov.vn), tạo ra corpus sạch, chất lượng cao, đồng thời xây dựng bộ báo cáo trực quan để đánh giá dữ liệu.
 
 # TECH STACK
 - **Language**: Python 3.11+
 - **Package Manager**: `uv` + `requirements.txt`
 - **Frameworks/Libraries**:
-  - Request handling & crawling: `requests`, `lxml` / `defusedxml` (OAI-PMH parsing)
+  - Request handling & crawling: `curl_cffi` (TLS Spoofing bypass WAF), `asyncio` (Overclocking), `BeautifulSoup`
   - Data Processing & Storage: `pandas`, `duckdb`, `pyarrow` (Parquet, JSONL)
-  - Document Parsing: `pypdf`, `pymupdf` (baseline), local AI OCR (Marker / Surya / Nougat chạy trực tiếp trên GPU A100).
+  - Document Parsing: `pypdf`, `pymupdf` (baseline), local AI OCR (Marker chạy trực tiếp trên 4 GPU A100).
   - Text Normalization: `ftfy`
-  - Visualization: `plotly`, `datashader`
-  - Orchestration: `Ray` (Sử dụng Ray local cluster để điều phối tải cho 4 GPU A100 40GB).
+  - Orchestration: `Ray` (Sử dụng Ray local cluster để điều phối tải cho GPU A100 40GB).
 - **Database Systems**: Local file system (Disk-chained stages), DuckDB (Analytics)
 
 # SYSTEM ARCHITECTURE
 - `<project_root>/`
-  - TBD: Cấu trúc thư mục sẽ được định hình chi tiết sau khi kế hoạch được phê duyệt. Hệ thống sẽ tuân theo kiến trúc Stage-based pipeline.
+  - `src/discovery/`: Quét danh sách bài báo qua pagination HTML bằng `curl_cffi`.
+  - `src/enrichment/`: Tải trực tiếp PDF siêu tốc (Overclocked asyncio downloader).
+  - `src/processing/`: `PDFTriager` và `PDFParser` sử dụng Ray Actor để chia việc cho 4 GPU.
 
 # ACTIVE INTEGRATIONS
-- **ViLA Architecture Patterns**:
-  - **Stage-based disk-chained processing**: Lưu trữ dữ liệu trung gian tại từng bước.
-  - **PoliteSession**: Tích hợp Token bucket rate-limiter, cơ chế retry với backoff để bảo vệ server VJOL.
-  - **Deterministic Pipeline**: Các bước xử lý sử dụng cơ chế cache key xác định để đảm bảo reproducible outputs.
-  - **Ray Orchestration & GPU Acceleration**: Tận dụng Ray Actors để chia nhỏ pipeline và xử lý OCR/Embedding song song qua 4 GPU A100.
-  - **Storage Auto-cleanup**: (Tùy chọn) Xóa PDF ngay sau khi parse xong để tiết kiệm ổ cứng.
+- **TLS Spoofing & Async Overclock**: Bỏ qua WAF của VISTA bằng TLS Client, gộp chung HTTP request bất đồng bộ để đạt giới hạn 5 req/s.
+- **Stage-based disk-chained processing**: Lưu trữ dữ liệu trung gian tại từng bước bằng Parquet.
+- **Ray Orchestration & GPU Acceleration**: Tận dụng Ray Actors để chia nhỏ pipeline và xử lý OCR song song.
 
 # DEVELOPMENT LOG
-- **2026-08-17**: Khởi tạo dự án. Phân tích tài liệu kiến trúc. Chốt phương án kỹ thuật: dùng uv, tích hợp Ray để tận dụng 4xA100 GPU, và dùng local AI OCR (miễn phí).
+- **2026-08-17**: Khởi tạo dự án, phân tích rate limit của VJOL.
+- **2026-08-18**: Xoay trục (Pivot) sang VISTA (`sti.vista.gov.vn`). Thiết kế lại Crawler dùng `curl_cffi` và `asyncio` để vượt tường lửa WAF và ép xung tốc độ tải PDF trực tiếp từ trang danh sách (Rút ngắn thời gian từ 24 ngày xuống ~1.1 ngày).

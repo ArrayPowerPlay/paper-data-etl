@@ -8,3 +8,6 @@ ray>=2.9.3
 duckdb>=0.10.0
 pytest>=8.0.0
 tqdm>=4.66.2
+omegaconf>=2.3.0
+curl_cffi>=0.7.1
+beautifulsoup4>=4.12.0
