@@ -19,7 +19,7 @@ Toàn bộ code logic của hệ thống nằm ở đây.
 - **`data/raw/pdf/`**: Đích đến cuối cùng của luồng Crawler hiện tại. Nơi chứa toàn bộ file PDF gốc tải từ VISTA. Các file ở đây được đặt tên bằng mã băm `SHA-256` để loại trừ hoàn toàn các file PDF nội dung giống hệt nhau.
 
 ## Tóm Lược Luồng Chảy Của VISTA
-1. Khởi chạy `python main.py --start-page 0 --end-page X`.
+1. Khởi chạy `$env:PYTHONPATH="."; python scripts/run_crawler.py` (Mặc định sẽ tự chạy toàn bộ trang).
 2. Crawler đọc `data/downloaded_log.jsonl` để né các bài đã tải.
 3. Kịch bản quét VISTA, đẩy task metadata vào `data/discovery_queue.jsonl`.
 4. Băng chuyền 2 luồng (hoặc 5 luồng nếu ép xung mạnh) tải thẳng file PDF về nhét vào `data/raw/pdf/<Mã_SHA256>.pdf`.
