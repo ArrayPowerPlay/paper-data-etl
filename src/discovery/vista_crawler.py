@@ -12,7 +12,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 class VistaCrawler:
-    def __init__(self, output_dir="data", max_concurrent_requests=2, total_pages=22500):
+    def __init__(self, output_dir="data", max_concurrent_requests=2):
         self.base_url = "https://sti.vista.gov.vn"
         self.output_dir = output_dir
         self.raw_pdf_dir = os.path.join(output_dir, "raw", "pdf")
@@ -20,7 +20,6 @@ class VistaCrawler:
         self.downloaded_log = os.path.join(output_dir, "downloaded_log.jsonl")
         self.max_concurrent = max_concurrent_requests
         self.semaphore = asyncio.Semaphore(self.max_concurrent)
-        self.total_pages = total_pages
         self.processed_ids = set()
         
         os.makedirs(self.raw_pdf_dir, exist_ok=True)
@@ -140,10 +139,19 @@ class VistaCrawler:
 
     async def _producer(self, session, queue, start_page, end_page):
         """Producer: Scrape pagination and put PDF records into the Queue."""
-        # VISTA pages increment by 20: 0, 20, 40, 60...
-        for page_idx in range(start_page, end_page):
+        page_idx = start_page
+        while True:
+            if end_page is not None and page_idx >= end_page:
+                logger.info(f"Đã đạt giới hạn end_page={end_page}. Dừng quét.")
+                break
+                
             offset = page_idx * 20
             articles = await self.extract_links_from_page(session, offset)
+            
+            # Điều kiện dừng tự động: Nếu trang trả về không có bài báo nào (Cạn kiệt)
+            if not articles:
+                logger.info(f"Không tìm thấy bài báo nào ở trang {page_idx}. Đã quét đến cuối danh sách. Dừng quét.")
+                break
             
             # Save metadata to queue file immediately
             with open(self.queue_file, "a", encoding="utf-8") as f:
@@ -153,6 +161,7 @@ class VistaCrawler:
                     
             # A small breather to not overload the server entirely
             await asyncio.sleep(1)
+            page_idx += 1
             
         # Signal workers to stop
         for _ in range(self.max_concurrent):
@@ -174,7 +183,7 @@ class VistaCrawler:
                 
             queue.task_done()
 
-    async def run_overclocked_pipeline(self, start_page=0, end_page=100):
+    async def run_overclocked_pipeline(self, start_page=0, end_page=None):
         """Run the Discovery and Download pipeline concurrently."""
         queue = asyncio.Queue(maxsize=100)
         
