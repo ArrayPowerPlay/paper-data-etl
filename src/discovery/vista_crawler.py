@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import random
 from bs4 import BeautifulSoup
 from curl_cffi import requests
 from urllib.parse import urljoin
@@ -38,9 +39,14 @@ class VistaCrawler:
                         pass
         logger.info(f"Đã khôi phục {len(self.processed_ids)} bài báo đã tải thành công từ lần chạy trước.")
         
-    async def _fetch_page(self, session, url, max_retries=3):
+    async def _fetch_page(self, session, url, max_retries=None):
         """Fetch a page asynchronously using TLS spoofing with Retry + Backoff."""
-        for attempt in range(max_retries):
+        attempt = 0
+        while True:
+            if max_retries is not None and attempt >= max_retries:
+                logger.error(f"Thất bại hoàn toàn sau {max_retries} lần tải {url}")
+                return None, None
+                
             async with self.semaphore:
                 try:
                     # Impersonate Chrome to bypass WAF
@@ -50,14 +56,12 @@ class VistaCrawler:
                 except Exception as e:
                     # Nếu là lỗi 429 (Too Many Requests), nghỉ ngơi lâu hơn một chút
                     is_429 = "429" in str(e)
-                    wait_time = (2 ** attempt) + (5 if is_429 else 0)
+                    # Cáp thời gian chờ tối đa là 60 giây để không bị treo quá lâu
+                    wait_time = min((15 * (attempt + 1)) if is_429 else (2 ** attempt), 60)
                     
-                    if attempt < max_retries - 1:
-                        logger.warning(f"Lỗi tải {url}: {e}. Đang thử lại (Lần {attempt + 1}/{max_retries}) sau {wait_time}s...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error(f"Thất bại hoàn toàn sau {max_retries} lần tải {url}: {e}")
-                        return None, None
+                    logger.warning(f"Lỗi tải {url}: {e}. Đang thử lại vô hạn (Lần {attempt + 1}) sau {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                    attempt += 1
 
     async def extract_links_from_page(self, session, offset):
         """Fetch a listing page and extract article metadata and PDF links."""
@@ -137,7 +141,7 @@ class VistaCrawler:
         record["status"] = "downloaded"
         return record
 
-    async def _producer(self, session, queue, start_page, end_page):
+    async def _producer(self, sessions, queue, start_page, end_page):
         """Producer: Scrape pagination and put PDF records into the Queue."""
         page_idx = start_page
         while True:
@@ -146,6 +150,8 @@ class VistaCrawler:
                 break
                 
             offset = page_idx * 20
+            # Lựa chọn ngẫu nhiên 1 proxy session để lật trang, tránh bị block IP khi quét HTML
+            session = random.choice(sessions)
             articles = await self.extract_links_from_page(session, offset)
             
             # Điều kiện dừng tự động: Nếu trang trả về không có bài báo nào (Cạn kiệt)
@@ -175,6 +181,8 @@ class VistaCrawler:
                 queue.task_done()
                 break
                 
+            # Đã có 10 Proxy bảo kê, tốc độ có thể khôi phục lại tối đa, chỉ cần khựng siêu nhẹ (0.1s - 0.3s)
+            await asyncio.sleep(random.uniform(0.1, 0.3))
             updated_record = await self.download_pdf(session, record)
             
             # Ghi nhận kết quả tải vào file log gốc
@@ -187,22 +195,42 @@ class VistaCrawler:
         """Run the Discovery and Download pipeline concurrently."""
         queue = asyncio.Queue(maxsize=100)
         
-        # AsyncSession with curl_cffi handles TLS spoofing and connection pooling
-        async with requests.AsyncSession(impersonate="chrome110") as session:
+        from dotenv import load_dotenv
+        load_dotenv()
+        proxy_str = os.getenv("PROXIES", "")
+        proxy_list = [p.strip() for p in proxy_str.split(",")] if proxy_str else []
+        
+        sessions = []
+        if not proxy_list:
+            logger.warning("Không tìm thấy proxy trong .env, sử dụng kết nối trực tiếp (có nguy cơ bị WAF chặn).")
+            sessions.append(requests.AsyncSession(impersonate="chrome110"))
+        else:
+            for p in proxy_list:
+                proxy_dict = {"http": p, "https": p}
+                sessions.append(requests.AsyncSession(impersonate="chrome110", proxies=proxy_dict))
+                
+        num_workers = min(self.max_concurrent, len(sessions)) if proxy_list else self.max_concurrent
+        logger.info(f"Khởi động {num_workers} luồng tải song song với {len(sessions)} proxies.")
+
+        try:
             # Create Producer task
             producer_task = asyncio.create_task(
-                self._producer(session, queue, start_page, end_page)
+                self._producer(sessions, queue, start_page, end_page)
             )
             
             # Create Consumer tasks (Workers)
             consumers = []
-            # Use max_concurrent workers for downloading
-            for _ in range(self.max_concurrent):
+            for i in range(num_workers):
+                # Gán cố định mỗi luồng Worker một Proxy Session riêng biệt
+                session = sessions[i % len(sessions)]
                 task = asyncio.create_task(self._consumer(session, queue))
                 consumers.append(task)
                 
             await asyncio.gather(producer_task, *consumers)
             logger.info("Pipeline completed for the specified page range.")
+        finally:
+            for s in sessions:
+                s.close()
 
 if __name__ == "__main__":
     from src.common.logger import setup_logger

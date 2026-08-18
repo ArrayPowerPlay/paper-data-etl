@@ -1,5 +1,9 @@
 import asyncio
 import argparse
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from src.discovery.vista_crawler import VistaCrawler
 from src.common.logger import setup_logger
 
