@@ -1,0 +1,22 @@
+host: www.vjol.info.vn
+output_dir: data
+
+crawler:
+  user_agent: "paper-data-etl/0.1 (Contact: test@example.com)"
+  qps: 0.1  # 1 request / 10 seconds (tuân thủ Crawl-delay: 10 trong robots.txt)
+  burst: 1
+  timeout_s: 60
+  max_retries: 5
+  obey_robots: true
+  oai_base_url: "https://www.vjol.info.vn/index.php/index/oai"
+
+parser:
+  primary: docling
+  metadata_parser: grobid
+  fallback: marker
+  remote_ocr_allowed: false
+  gpu_count: 4
+
+triage:
+  min_text_ratio: 0.8
+  max_image_ratio: 0.8
