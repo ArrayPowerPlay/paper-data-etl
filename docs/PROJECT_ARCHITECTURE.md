@@ -1,26 +1,39 @@
 # Cấu Trúc Dự Án (Project Architecture)
 
-Tài liệu này giải thích chi tiết ý nghĩa của các thư mục và file sinh ra trong quá trình chạy Pipeline VISTA Crawler.
+Tài liệu này giải thích ý nghĩa các thư mục/file chính trong repo. Chi tiết luồng chạy xem `docs/PIPELINE_VISTA.md` (đang triển khai) và `docs/PIPELINE_VJOL.md` (đã lưu trữ).
 
-## 1. Thư mục mã nguồn (`src/`)
-Toàn bộ code logic của hệ thống nằm ở đây.
-- **`src/common/`**: Chứa các file cấu hình dùng chung như module log (`logger.py`).
-- **`src/discovery/`**: Chứa code lùng sục dữ liệu. File `vista_crawler.py` đóng vai trò rà quét toàn bộ trang danh sách của VISTA để bóc tách siêu dữ liệu và link PDF (sử dụng thư viện `curl_cffi` và `asyncio` để vượt WAF).
-- **`src/processing/`** (Sắp tới): Nơi chứa logic dùng Ray và GPU (Marker OCR) để bóc tách text từ file PDF.
+## 1. Mã nguồn
+- **`src/common/logger.py`**: Cấu hình log dùng chung.
+- **`src/discovery/vista_crawler.py`**: Toàn bộ logic Discovery + Download của VISTA (`curl_cffi` + `asyncio` để vượt WAF).
+- **`scripts/run_crawler.py`**: Entry point chạy crawler VISTA (`--start-page`, `--end-page`).
+- **`scripts/benchmark_*.py`, `scripts/test_*.py`, `scripts/generate_sticky_proxies.py`**: Script thử nghiệm/benchmark cấu hình proxy & tốc độ crawl, chưa merge vào `src/`.
+- **`src/processing/`**: Chưa tồn tại — dự kiến chứa logic Ray + GPU (Marker OCR) để bóc tách text từ PDF (xem `docs/IMPLEMENTATION_PLAN.md`).
 
-## 2. Thư mục chứa Dữ Liệu (`data/`)
-Đây là kho chứa toàn bộ chiến lợi phẩm. Hệ thống dùng kiến trúc **Disk-chained** (Làm đến đâu lưu ra đĩa đến đó để chống crash).
+## 2. Thư mục dữ liệu (`data/`)
+Kiến trúc **Disk-chained**: làm đến đâu lưu ra đĩa đến đó để chống crash và có thể resume.
 
-### A. Các File Điều Phối (Điều khiển tải ngắt quãng và phân tán)
-- **`data/discovery_queue.jsonl`**: Hàng chờ (Queue). Khi crawler quét qua các trang danh sách, nó lưu tạm thông tin bài báo (ID, Tiêu đề, Link tải) vào đây. Luồng tải PDF sẽ đọc từ file này để tải.
-- **`data/downloaded_log.jsonl`**: Cuốn sổ Nam Tào. Mỗi khi 1 file PDF được tải và lưu thành công, kết quả được ghi nhận vào đây. Bất cứ khi nào bạn bật lại code, hệ thống sẽ đọc cuốn sổ này đầu tiên để tự động **Bỏ qua (Deduplicate)** những bài đã tải, không bao giờ tải trùng lại.
+### Các file điều phối
+- **`data/discovery_queue.jsonl`**: Hàng chờ — mỗi bài quét được từ trang danh sách VISTA (ID, tiêu đề, link tải) được ghi vào đây trước khi tải.
+- **`data/downloaded_log.jsonl`**: Sổ ghi kết quả tải — mỗi bài xử lý xong (`downloaded`/`corrupt_pdf`/`download_failed`) được append vào đây. Khi khởi động lại, crawler đọc file này đầu tiên để **bỏ qua (dedupe)** các bài đã tải thành công.
 
-### B. Các Thư Mục Dữ Liệu Chuyên Dụng
-- **`data/raw/pdf/`**: Đích đến cuối cùng của luồng Crawler hiện tại. Nơi chứa toàn bộ file PDF gốc tải từ VISTA. Các file ở đây được đặt tên bằng mã băm `SHA-256` để loại trừ hoàn toàn các file PDF nội dung giống hệt nhau.
+### Thư mục PDF
+- **`data/raw/pdf/`**: File PDF gốc tải từ VISTA, đặt tên theo `SHA-256` để loại trừ file trùng nội dung.
 
-## Tóm Lược Luồng Chảy Của VISTA
-1. Khởi chạy `$env:PYTHONPATH="."; python scripts/run_crawler.py` (Mặc định sẽ tự chạy toàn bộ trang).
+### Thư mục thử nghiệm (không phải dữ liệu chính thức)
+- **`data/policy_benchmarks/`, `data/vista_benchmark_100/`, `data/vista_optimized_100/`, `data/vista_rotating_100/`, `data/proxy_test_download/`, `data/stateful_proxy_test/`**: Output của các script benchmark proxy/tốc độ trong `scripts/`, dùng để so sánh policy chứ không phải corpus thu thập chính thức.
+
+### Còn lại từ thử nghiệm VJOL (lịch sử, không còn cập nhật)
+- **`data/vjol_temp/`**: Dữ liệu tạm từ lần chạy thử VJOL — xem `docs/PIPELINE_VJOL.md`.
+
+## 3. Tệp cấu hình
+- **`proxies.txt`**: Danh sách proxy tĩnh định dạng `IP:PORT:USERNAME:PASSWORD`, dùng cho thử nghiệm `StatefulProxyManager`.
+- **`.env`** (không commit): Biến `PROXIES` — danh sách proxy phân tách bởi dấu phẩy, dùng bởi `src/discovery/vista_crawler.py`.
+
+## Tóm lược luồng chạy chính thức (VISTA)
+1. Khởi chạy `PYTHONPATH="." python scripts/run_crawler.py` (mặc định quét đến hết danh sách).
 2. Crawler đọc `data/downloaded_log.jsonl` để né các bài đã tải.
-3. Kịch bản quét VISTA, đẩy task metadata vào `data/discovery_queue.jsonl`.
-4. Băng chuyền 2 luồng (hoặc 5 luồng nếu ép xung mạnh) tải thẳng file PDF về nhét vào `data/raw/pdf/<Mã_SHA256>.pdf`.
-5. Đóng mộc thành công vào `data/downloaded_log.jsonl`.
+3. Quét trang danh sách VISTA, ghi metadata vào `data/discovery_queue.jsonl`.
+4. Các worker song song tải PDF, lưu vào `data/raw/pdf/<SHA-256>.pdf`.
+5. Ghi kết quả vào `data/downloaded_log.jsonl`.
+
+Xem `docs/PIPELINE_VISTA.md` để có sơ đồ chi tiết từng bước.
